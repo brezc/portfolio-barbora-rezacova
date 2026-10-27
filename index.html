@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta name="author" content="Barbora Řezáčová">
+<title>Barbora Řezáčová | CV</title>
+
+<!--
+  ============================================================
+  PŘIHLAŠOVACÍ STRÁNKA (brána s heslem)
+  ============================================================
+  Tohle je jediná nezašifrovaná stránka na webu. Samotné
+  portfolio leží vedle v souboru obsah.bin, zašifrované
+  (AES-256-GCM, klíč z hesla přes PBKDF2-SHA256).
+  Heslo tu nikde není, stránka ho jen použije k rozšifrování.
+  Bez správného hesla z obsah.bin nic nedostanete.
+
+  Úpravy portfolia se dělají v index.html v kořeni repozitáře,
+  ne tady. Zveřejnění: node zamek/publikovat.mjs
+  ============================================================
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --cream:      #FCF4F1;
+  --cream-3:    #EFD9D3;
+  --ink:        #1B0E13;
+  --ink-soft:   #6B4E57;
+  --rose:       #E03E68;
+  --rose-deep:  #B32A50;
+  --blush:      #F9D3DF;
+
+  --font-sans:  'Instrument Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+  --ease: cubic-bezier(.22,1,.36,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--font-sans);
+  background:var(--cream);
+  color:var(--ink);
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  display:flex;align-items:center;justify-content:center;
+  padding:1.5rem 1rem;
+  overflow:hidden;
+}
+/* jemná barevná skvrna na pozadí, ať to není holá stránka */
+body::before{
+  content:"";position:fixed;inset:-20%;z-index:-1;
+  background:
+    radial-gradient(40% 35% at 20% 25%, var(--blush) 0%, transparent 70%),
+    radial-gradient(35% 30% at 85% 80%, var(--cream-3) 0%, transparent 70%);
+}
+main{width:100%;max-width:24rem;text-align:center}
+.jmeno{
+  font-family:var(--font-serif);
+  font-size:clamp(2.4rem, 8vw, 3.4rem);
+  line-height:1.05;letter-spacing:-.01em;
+}
+.jmeno i{color:var(--rose)}
+.popis{margin:1rem 0 2rem;color:var(--ink-soft);font-size:.98rem}
+.popis span{display:block;font-size:.86rem;margin-top:.15rem}
+form{display:flex;flex-direction:column;gap:.75rem}
+input{
+  font:inherit;font-size:1rem;
+  width:100%;padding:.85rem 1.1rem;
+  border:1px solid var(--cream-3);border-radius:999px;
+  background:#fff;color:var(--ink);
+  text-align:center;
+  transition:border-color .3s var(--ease), box-shadow .3s var(--ease);
+}
+input:focus{outline:none;border-color:var(--rose);box-shadow:0 0 0 4px rgba(224,62,104,.15)}
+button{
+  font:inherit;font-weight:600;font-size:1rem;
+  padding:.85rem 1.1rem;border:none;border-radius:999px;cursor:pointer;
+  background:var(--ink);color:var(--cream);
+  transition:background .3s var(--ease), transform .3s var(--ease);
+}
+button:hover{background:var(--rose-deep)}
+button:active{transform:scale(.98)}
+button:disabled{opacity:.6;cursor:progress}
+.zprava{min-height:1.4em;font-size:.9rem;color:var(--ink-soft)}
+.zprava.chyba{color:var(--rose-deep)}
+.otres{animation:otres .4s var(--ease)}
+@keyframes otres{
+  20%{transform:translateX(-8px)} 40%{transform:translateX(7px)}
+  60%{transform:translateX(-4px)} 80%{transform:translateX(3px)}
+}
+@media (prefers-reduced-motion: reduce){ .otres{animation:none} }
+</style>
+</head>
+<body>
+
+<main>
+  <h1 class="jmeno">Barbora <i>Řezáčová</i></h1>
+  <p class="popis">Portfolio se ještě dokončuje. Pro vstup zadejte heslo.
+    <span lang="en">Work in progress. Enter the password to continue.</span></p>
+
+  <form id="zamek" autocomplete="off">
+    <input id="heslo" type="password" placeholder="Heslo / Password"
+           aria-label="Heslo" autocomplete="current-password" required autofocus>
+    <button type="submit">Vstoupit</button>
+    <p class="zprava" id="zprava" role="status" aria-live="polite"></p>
+  </form>
+  <noscript><p class="zprava chyba">Pro zobrazení portfolia zapněte JavaScript.</p></noscript>
+</main>
+
+<script>
+(function(){
+  'use strict';
+
+  /* Formát obsah.bin (musí sedět se zamek/publikovat.mjs):
+     "BRZ1" | počet iterací (uint32) | sůl 16 B | IV 12 B | šifra + tag
+     Prvních 36 bajtů je hlavička, ta je zároveň ověřená přes GCM. */
+  var HLAVICKA = 36;
+  var ULOZENY_KLIC = 'portfolio-klic';   /* jen do zavření karty */
+
+  var form   = document.getElementById('zamek'),
+      pole   = document.getElementById('heslo'),
+      tlac   = form.querySelector('button'),
+      zprava = document.getElementById('zprava');
+
+  function stav(text, chyba){
+    zprava.textContent = text;
+    zprava.classList.toggle('chyba', !!chyba);
+  }
+
+  if(!window.crypto || !crypto.subtle || !('DecompressionStream' in window)){
+    stav('Tenhle prohlížeč je na portfolio moc starý. Zkuste prosím jiný.', true);
+    tlac.disabled = true;
+    return;
+  }
+
+  /* Šifrovaný obsah se začne stahovat hned, ať je po zadání hesla rychle. */
+  var stahovani = null;
+  function nacist(){
+    if(!stahovani){
+      stahovani = fetch('obsah.bin').then(function(r){
+        if(!r.ok) throw new Error('obsah.bin: HTTP ' + r.status);
+        return r.arrayBuffer();
+      });
+      stahovani.catch(function(){ stahovani = null; });
+    }
+    return stahovani;
+  }
+  nacist();
+
+  function zB64(s){ return Uint8Array.from(atob(s), function(c){ return c.charCodeAt(0); }); }
+  function doB64(b){ return btoa(String.fromCharCode.apply(null, new Uint8Array(b))); }
+
+  async function klicZHesla(heslo, data){
+    var iterace = new DataView(data).getUint32(4);
+    var zaklad = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(heslo), 'PBKDF2', false, ['deriveBits']);
+    return crypto.subtle.deriveBits(
+      { name:'PBKDF2', hash:'SHA-256', salt:new Uint8Array(data, 8, 16), iterations:iterace },
+      zaklad, 256);
+  }
+
+  async function rozsifrovat(bity, data){
+    var hlavicka = new Uint8Array(data, 0, HLAVICKA);
+    if(String.fromCharCode.apply(null, hlavicka.subarray(0, 4)) !== 'BRZ1')
+      throw new Error('Neznámý formát obsah.bin');
+    var klic = await crypto.subtle.importKey('raw', bity, 'AES-GCM', false, ['decrypt']);
+    var zabaleno = await crypto.subtle.decrypt(
+      { name:'AES-GCM', iv:new Uint8Array(data, 24, 12), additionalData:hlavicka },
+      klic, new Uint8Array(data, HLAVICKA));
+    var proud = new Blob([zabaleno]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(proud).text();
+  }
+
+  /* Rozšifrované portfolio nahradí tuhle stránku (adresa zůstane stejná). */
+  function zobrazit(html){
+    document.open();
+    document.write(html);
+    document.close();
+  }
+
+  /* Po obnovení stránky ve stejné kartě se heslo znovu nezadává. */
+  (async function(){
+    var ulozeny = null;
+    try{ ulozeny = sessionStorage.getItem(ULOZENY_KLIC); }catch(e){}
+    if(!ulozeny) return;
+    tlac.disabled = true;
+    stav('Odemykám…');
+    try{
+      zobrazit(await rozsifrovat(zB64(ulozeny), await nacist()));
+    }catch(e){
+      try{ sessionStorage.removeItem(ULOZENY_KLIC); }catch(_){}
+      tlac.disabled = false;
+      stav('');
+    }
+  })();
+
+  form.addEventListener('submit', async function(e){
+    e.preventDefault();
+    var heslo = pole.value;
+    if(!heslo) return;
+    tlac.disabled = true;
+    stav('Odemykám…');
+
+    var data;
+    try{ data = await nacist(); }
+    catch(err){
+      tlac.disabled = false;
+      stav('Obsah se nepodařilo načíst. Zkontrolujte připojení a zkuste to znovu.', true);
+      return;
+    }
+
+    var bity, html;
+    try{
+      bity = await klicZHesla(heslo, data);
+      html = await rozsifrovat(bity, data);
+    }catch(err){
+      tlac.disabled = false;
+      stav('Heslo nesedí. Wrong password.', true);
+      form.classList.remove('otres'); void form.offsetWidth; form.classList.add('otres');
+      pole.select();
+      return;
+    }
+
+    try{ sessionStorage.setItem(ULOZENY_KLIC, doB64(bity)); }catch(e){}
+    zobrazit(html);
+  });
+})();
+</script>
+</body>
+</html>
